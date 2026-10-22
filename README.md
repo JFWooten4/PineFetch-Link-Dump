@@ -69,3 +69,8 @@ See the [changelog](docs/changelog.md) for release notes and changes.
 ## License
 
 MIT
+
+
+## YouTube cookie sync
+
+Pair the extension with your local PineFetch instance using its connection secret. In PineFetch, open **Browser Import** and choose **Enable Cookie Sync**. Then click **Sync YouTube Cookies** in this extension and approve cookie access if requested. Only YouTube cookies from this browser profile are sent over the authenticated local connection. They are used for the current PineFetch app session; sync again after restarting PineFetch or when your login changes. PineFetch prefers extension cookies and falls back to its selected yt-dlp browser reader when they are unavailable or expired. Use **Disconnect** in PineFetch to turn off both sources for new requests. Cookies are never printed or saved in extension settings.
