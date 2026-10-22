@@ -10,6 +10,7 @@ const MAX_FILENAME_BASENAME_LENGTH = 180;
 
 let currentPageInfo = null;
 let isLoading = false;
+let isSyncingCookies = false;
 let saveSettingsTimer = null;
 let sendFeedbackTimer = null;
 const elements = {};
@@ -63,6 +64,8 @@ function cacheElements() {
     elements.feedbackPanel = document.getElementById('pfFeedbackPanel');
     elements.versionLabel = document.getElementById('pfVersionLabel');
     elements.secretError = document.getElementById('pfSecretError');
+    elements.syncCookiesButton = document.getElementById('pfSyncCookiesButton');
+    elements.cookieSyncStatus = document.getElementById('pfCookieSyncStatus');
 }
 
 function bindEvents() {
@@ -72,6 +75,7 @@ function bindEvents() {
     elements.endpointInput.addEventListener('change', persistCurrentSettings);
     elements.secretInput.addEventListener('change', persistCurrentSettings);
     elements.sendButton.addEventListener('click', handleSendClick);
+    elements.syncCookiesButton?.addEventListener('click', handleCookieSyncClick);
     elements.exportButton.addEventListener('click', handleExportClick);
     elements.exportFormatDropdown.addEventListener('oj:select', handleExportFormatSelect);
     elements.previewMode.addEventListener('click', copyCurrentPreviewLinks);
@@ -795,4 +799,58 @@ function buildPineFetchRequestUrl(endpointBase, path) {
     const cleanBase = `${parsedBase.origin}${normalizedPathname}`;
     const cleanPath = `/${String(path || '').replace(/^\/+/, '')}`;
     return `${cleanBase}${cleanPath}`;
+}
+
+
+async function handleCookieSyncClick() {
+    if (isSyncingCookies) return;
+    const endpoint = elements.endpointInput.value.trim() || DEFAULT_ENDPOINT_BASE;
+    const secret = elements.secretInput.value.trim();
+    const status = message => { elements.cookieSyncStatus.textContent = message; };
+    // Validate the destination before requesting permission or reading cookies.
+    let requestUrl;
+    try { requestUrl = buildPineFetchRequestUrl(endpoint, '/syncYoutubeCookies/'); }
+    catch { status('Use a local PineFetch endpoint in Settings.'); return; }
+    if (!secret) { status('Enter your PineFetch connection secret in Settings first.'); return; }
+    isSyncingCookies = true;
+    elements.syncCookiesButton.disabled = true;
+    status('Approve cookie access if prompted, then wait for PineFetch.');
+    let timeoutId;
+    try {
+        // This must be called from the extension click, before any other await.
+        const granted = await chrome.permissions.request({ permissions: ['cookies'] });
+        if (!granted) { status('Cookie permission was not granted. Nothing was sent.'); return; }
+        const cookies = await chrome.cookies.getAll({ domain: 'youtube.com' });
+        const payload = cookies.filter(cookie => {
+            const domain = cookie.domain.replace(/^\./, '').toLowerCase();
+            return !cookie.partitionKey && (domain === 'youtube.com' || domain.endsWith('.youtube.com'));
+        }).map(({ domain, path, name, value, secure, httpOnly, hostOnly, expirationDate }) =>
+            ({ domain, path, name, value, secure, httpOnly, hostOnly, expirationDate }));
+        if (!payload.length) { status('No YouTube cookies found. Sign in to YouTube in this browser profile, then retry.'); return; }
+        const controller = new AbortController();
+        timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+        const response = await fetch(requestUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ secret, cookies: payload }),
+            signal: controller.signal,
+            redirect: 'error',
+            credentials: 'omit',
+            cache: 'no-store',
+        });
+        if (!response.ok) {
+            status(response.status === 401
+                ? 'Connection rejected. Check your PineFetch secret in Settings.'
+                : 'Enable Cookie Sync in PineFetch, then try again.');
+            return;
+        }
+        const result = await response.json();
+        status(result.ok === true ? 'YouTube cookies synced to PineFetch for this app session.' : 'Cookie sync was not accepted. Please try again.');
+    } catch {
+        status('Could not sync cookies. Keep PineFetch running and check the local connection, then retry.');
+    } finally {
+        clearTimeout(timeoutId);
+        isSyncingCookies = false;
+        elements.syncCookiesButton.disabled = false;
+    }
 }
